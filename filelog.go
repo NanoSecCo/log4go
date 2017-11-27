@@ -3,10 +3,18 @@
 package log4go
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
+	"reflect"
+	"os/signal"
+	"syscall"
 )
+
+// buffer filters
+var n int
+var w *FileLogWriter
 
 // This log writer sends output to a file
 type FileLogWriter struct {
@@ -38,11 +46,24 @@ type FileLogWriter struct {
 	// Keep old logfiles (.001, .002, etc)
 	rotate    bool
 	maxbackup int
+
+	//buffer
+	buffer []byte
+	position int
+	buff *bytes.Buffer
+
+	// log buffering dis/enable 
+	log_var bool
+
+	// buffer capacity
+	capacity int
+	timeout int 
 }
 
 // This is the FileLogWriter's output method
 func (w *FileLogWriter) LogWrite(rec *LogRecord) {
 	w.rec <- rec
+	//fmt.Printf("len=%d, cap=%d\n", len(w.rec), cap(w.rec))
 }
 
 func (w *FileLogWriter) Close() {
@@ -60,22 +81,42 @@ func (w *FileLogWriter) Close() {
 // The standard log-line format is:
 //   [%D %T] [%L] (%S) %M
 func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
-	w := &FileLogWriter{
+	var err error
+	var offset int 
+	w = &FileLogWriter{
 		rec:       make(chan *LogRecord, LogBufferLength),
 		rot:       make(chan bool),
 		filename:  fname,
 		format:    "[%D %T] [%L] (%S) %M",
 		rotate:    rotate,
 		maxbackup: 999,
+		//buffer:    make([]byte, w.capacity),
+		buff: 	   bytes.NewBuffer(make([]byte, 0, 8192)),
+		log_var:   true,
+		capacity:  8192,
+		timeout:   300000000000, 
 	}
 
+	// handle shutdown signals
+	s := make(chan os.Signal, 1)
+	signal.Notify(s,
+		syscall.SIGQUIT,
+		syscall.SIGKILL, 
+		syscall.SIGINT, 
+		syscall.SIGTERM,
+		syscall.SIGTSTP)
+
 	// open the file for the first time
-	if err := w.intRotate(); err != nil {
+	if err = w.intRotate(); err != nil {
 		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 		return nil
 	}
-
+	
 	go func() {
+
+		// from here timeout
+		timeout := time.After(time.Duration(w.timeout))
+
 		defer func() {
 			if w.file != nil {
 				fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
@@ -84,11 +125,34 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		}()
 
 		for {
-			select {
+		    	select {
 			case <-w.rot:
-				if err := w.intRotate(); err != nil {
+				if err = w.intRotate(); err != nil {
 					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 					return
+				}
+			case <-timeout:
+				if (w.log_var == true && offset+w.position > 0) {
+					//fmt.Println("received timeout signal <<<<")
+					//fmt.Printf("file=%s, buff_content=%d\n", w.file, offset+w.position)
+					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+					w.position =0;
+					w.buff.Reset()
+				
+					// re-arm timer
+					timeout = time.After(time.Duration(w.timeout))
+				}
+			case <-s:
+				fmt.Println("received shutdown signals <<<<")
+				if w.log_var == true {
+					fmt.Printf("file=%s, buff_content=%d\n", w.file, offset+w.position)
+					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+					w.position =0;
+					w.buff.Reset()
+					os.Exit(1)
+				} else {
+					fmt.Println("Log buff disabled, no action\n")
+					os.Exit(1)
 				}
 			case rec, ok := <-w.rec:
 				if !ok {
@@ -98,26 +162,39 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
 					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
 					(w.daily && now.Day() != w.daily_opendate) {
-					if err := w.intRotate(); err != nil {
+					if err = w.intRotate(); err != nil {
 						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 						return
 					}
 				}
+				if w.log_var == false {
+					//fmt.Println("one(w) <----w.rec")
+					n, err = fmt.Fprint(w.file, FormatLogRecord(w.format, rec))
+				} else {
+					//fmt.Println("rec=", rec)
+					offset, err = w.buff.WriteString(string(FormatLogRecord(w.format, rec)))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+						return
+					}
 
-				// Perform the write
-				n, err := fmt.Fprint(w.file, FormatLogRecord(w.format, rec))
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
-					return
-				}
-
+					w.position += offset 
+					//fmt.Printf("file=%s, offset=%d, w.position=%d\n", w.file, offset, w.position)
+					if(offset + w.position) > w.capacity {
+						//fmt.Println("buff(w) <----w.rec")
+						n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+						w.position =0;
+						w.buff.Reset()
+					}  
+				} // log buffering enabled
+					
 				// Update the counts
 				w.maxlines_curlines++
-				w.maxsize_cursize += n
+				w.maxsize_cursize += n 
+				//fmt.Printf("lines=%d, size=%d\n", w.maxlines_curlines, w.maxsize_cursize)
 			}
 		}
 	}()
-
 	return w
 }
 
@@ -193,6 +270,16 @@ func (w *FileLogWriter) intRotate() error {
 	return nil
 }
 
+func (w *FileLogWriter) SetTimeout(timeout int) *FileLogWriter {
+	w.timeout = timeout
+	return w
+}
+
+func (w *FileLogWriter) SetCapacity(capacity int) *FileLogWriter {
+	w.capacity = capacity
+	return w
+}
+
 // Set the logging format (chainable).  Must be called before the first log
 // message is written.
 func (w *FileLogWriter) SetFormat(format string) *FileLogWriter {
@@ -261,4 +348,47 @@ func NewXMLLogWriter(fname string, rotate bool) *FileLogWriter {
 		<source>%S</source>
 		<message>%M</message>
 	</record>`).SetHeadFoot("<log created=\"%D %T\">", "</log>")
+}
+
+func ChanToSlice(ch interface{}) interface{} {
+    //var buffer bytes.Buffer
+    fmt.Println("....in ChanToSlice")
+    chv := reflect.ValueOf(ch)
+    slv := reflect.MakeSlice(reflect.SliceOf(reflect.TypeOf(ch).Elem()), 0, 0)
+    //fmt.Println("slv=", slv.Interface())
+    for i:=0; i<4; i++ {
+    //for {
+        v, ok := chv.Recv()
+    	//copy(w.buffer[w.position:], reflect.ValueOf(v).String())
+    	//copy(w.buffer[w.position:], v.[]String())
+    	//w.position += v.Len() 
+	//n, err = fmt.Fprint(w.file, FormatLogRecord(w.format, sl))
+    	fmt.Println("v=", v)
+        if !ok {
+            return slv.Interface()
+        }
+        slv = reflect.Append(slv, v)
+    }
+    //buff.Write(reflect.ValueOf(slv).Elem())
+    //_, err := fmt.Fprint(w.file, FormatLogRecord(w.format, slv.Interface().(*LogRecord)))
+    fmt.Println("write slv slice\n")
+    //_, err := fmt.Fprint(w.file, slv.Interface().(*LogRecord))
+    _, err := fmt.Fprint(w.file, reflect.ValueOf(slv))
+    if err != nil {
+	fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+    }
+    fmt.Println("after - write slv slice\n")
+    //buffer.Write(log)
+    //copy(w.buffer[w.position:], reflect.ValueOf(slv).(Elem))
+    //w.position += len(slv) 
+    //fmt.Println("2....after for loop", slv.Interface())
+    return slv
+}
+
+func ToSlice(c chan interface{}) []interface{} {
+    s := make([]interface{}, 0)
+    for i := range c {
+        s = append(s, i)
+    }
+    return s
 }
