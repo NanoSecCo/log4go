@@ -16,6 +16,11 @@ import (
 var n int
 var w *FileLogWriter
 
+type timer struct {
+	*time.Timer
+	scr bool
+}
+
 // This log writer sends output to a file
 type FileLogWriter struct {
 	rec chan *LogRecord
@@ -83,6 +88,8 @@ func (w *FileLogWriter) Close() {
 func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	var err error
 	var offset int 
+	offset = 0
+	var window int
 	w = &FileLogWriter{
 		rec:       make(chan *LogRecord, LogBufferLength),
 		rot:       make(chan bool),
@@ -94,7 +101,8 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		buff: 	   bytes.NewBuffer(make([]byte, 0, 8192)),
 		log_var:   true,
 		capacity:  8192,
-		timeout:   300000000000, 
+		timeout:   18000000000, //18sec timer flush
+		position:  0,
 	}
 
 	// handle shutdown signals
@@ -115,7 +123,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	go func() {
 
 		// from here timeout
-		timeout := time.After(time.Duration(w.timeout))
+		t := NewTimer(time.Duration(w.timeout))
 
 		defer func() {
 			if w.file != nil {
@@ -131,16 +139,17 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 					return
 				}
-			case <-timeout:
+			case <-t.C:
+				t.SCR()
 				if (w.log_var == true && offset+w.position > 0) {
-					//fmt.Println("received timeout signal <<<<")
-					//fmt.Printf("file=%s, buff_content=%d\n", w.file, offset+w.position)
+					// fmt.Println("received timeout signal <<<<")
+					// fmt.Printf("file=%s, buff_content=%d\n", w.file, offset+w.position)
 					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
 					w.position =0;
 					w.buff.Reset()
 				
-					// re-arm timer
-					timeout = time.After(time.Duration(w.timeout))
+					// reset timer
+					t.SafeReset(time.Duration(w.timeout))
 				}
 			case <-s:
 				fmt.Println("received shutdown signals <<<<")
@@ -162,6 +171,15 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
 					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
 					(w.daily && now.Day() != w.daily_opendate) {
+					// flush buffer 
+					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+						return
+					}
+					w.position =0
+					w.buff.Reset()
+
 					if err = w.intRotate(); err != nil {
 						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 						return
@@ -171,7 +189,37 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					//fmt.Println("one(w) <----w.rec")
 					n, err = fmt.Fprint(w.file, FormatLogRecord(w.format, rec))
 				} else {
-					//fmt.Println("rec=", rec)
+					// compute length of record 
+					record_len := len(string(FormatLogRecord(w.format, rec)))
+					// fmt.Println("rec=", rec)
+					//////////////// trial code for buffer flexibility
+					window = w.capacity - w.position
+					if(window == w.capacity || window < w.capacity/2) {
+						t.SafeReset(time.Duration(w.timeout)) // early
+					}
+						
+					if(record_len < window) {
+						// fmt.Printf("rec_len=%d, diff=%d\n", record_len, w.capacity-w.position)
+						// write to buffer
+						// update the accumulation
+						offset, err = w.buff.WriteString(string(FormatLogRecord(w.format, rec)))
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
+							return
+						}
+						w.position += offset 
+				 	} else { // record can't fit and buffer is fullest to it capacity
+						t.SafeReset(time.Duration(w.timeout)) // early
+						// fmt.Println("buff(w) <----w.rec")
+						// elapsed := time.Since(now)
+						// fmt.Printf("[<-]-- Buffer fill time %s", elapsed)
+						n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+						w.position =0;
+						w.buff.Reset()
+					}	
+					//////////////////////end
+/*
+					//////////////////////old
 					offset, err = w.buff.WriteString(string(FormatLogRecord(w.format, rec)))
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
@@ -180,14 +228,19 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 
 					w.position += offset 
 					//fmt.Printf("file=%s, offset=%d, w.position=%d\n", w.file, offset, w.position)
-					if(offset + w.position) > w.capacity {
-						//fmt.Println("buff(w) <----w.rec")
+					if (w.position > w.thresold) { 
+					//if (offset > (w.capacity - w.position) 
+						fmt.Println("buff(w) <----w.rec")
+						elapsed := time.Since(now)
+						fmt.Printf("[<-]-- Buffer fill time %s", elapsed)
 						n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
 						w.position =0;
 						w.buff.Reset()
-					}  
+						t.SafeReset(time.Duration(w.timeout)) // early
+					}
+					/////////////// old end  
+*/
 				} // log buffering enabled
-					
 				// Update the counts
 				w.maxlines_curlines++
 				w.maxsize_cursize += n 
@@ -391,4 +444,25 @@ func ToSlice(c chan interface{}) []interface{} {
         s = append(s, i)
     }
     return s
+}
+
+//saw channel read, must be called after receiving value from timer chan
+func (t *timer) SCR() {
+	t.scr = true
+}
+
+func (t *timer) SafeReset(d time.Duration) bool {
+	ret := t.Stop()
+	if !ret && !t.scr {
+		<-t.C
+	}
+	t.Timer.Reset(d)
+	t.scr = false
+	return ret
+}
+
+func NewTimer(d time.Duration) *timer {
+	return &timer{
+		Timer: time.NewTimer(d),
+	}
 }
