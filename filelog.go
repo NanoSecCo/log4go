@@ -84,10 +84,11 @@ func (w *FileLogWriter) Close() {
 func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	var err error
 	var offset int 
-	var n int
+	var nbuf, n int
 	var window int
 	offset = 0
 	n = 0
+	nbuf = 0
 	w := &FileLogWriter{
 		rec:       make(chan *LogRecord, LogBufferLength),
 		rot:       make(chan bool),
@@ -165,7 +166,6 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					return
 				}
 				now := time.Now()
-				n = 0
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
 					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
 					(w.daily && now.Day() != w.daily_opendate) {
@@ -206,11 +206,12 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 							return
 						}
 						w.position += offset 
+						n = offset
 				 	} else { // record can't fit and buffer is fullest to it capacity
 						// fmt.Println("buff(w) <----w.rec")
 						// elapsed := time.Since(now)
 						// fmt.Printf("[<-]-- Buffer fill time %s", elapsed)
-						n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
+						nbuf, err = fmt.Fprint(w.file, (string)(w.buff.String()))
 						w.position =0;
 						w.buff.Reset()
 
