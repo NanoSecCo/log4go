@@ -7,14 +7,10 @@ import (
 	"fmt"
 	"os"
 	"time"
-	"reflect"
+	//"reflect"
 	"os/signal"
 	"syscall"
 )
-
-// buffer filters
-var n int
-var w *FileLogWriter
 
 type timer struct {
 	*time.Timer
@@ -88,9 +84,11 @@ func (w *FileLogWriter) Close() {
 func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	var err error
 	var offset int 
-	offset = 0
+	var n int
 	var window int
-	w = &FileLogWriter{
+	offset = 0
+	n = 0
+	w := &FileLogWriter{
 		rec:       make(chan *LogRecord, LogBufferLength),
 		rot:       make(chan bool),
 		filename:  fname,
@@ -119,11 +117,11 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 		return nil
 	}
-	
-	go func() {
 
-		// from here timeout
-		t := NewTimer(time.Duration(w.timeout))
+	// from here timeout
+	t := NewTimer(time.Duration(w.timeout))
+
+	go func() {
 
 		defer func() {
 			if w.file != nil {
@@ -145,12 +143,11 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					// fmt.Println("received timeout signal <<<<")
 					// fmt.Printf("file=%s, buff_content=%d\n", w.file, offset+w.position)
 					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
-					w.position =0;
+					w.position =0
 					w.buff.Reset()
-				
-					// reset timer
-					t.SafeReset(time.Duration(w.timeout))
 				}
+				// reset timer
+				t.SafeReset(time.Duration(w.timeout))
 			case <-s:
 				fmt.Println("received shutdown signals <<<<")
 				if w.log_var == true {
@@ -168,6 +165,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					return
 				}
 				now := time.Now()
+				n = 0
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
 					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
 					(w.daily && now.Day() != w.daily_opendate) {
@@ -194,7 +192,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					// fmt.Println("rec=", rec)
 					//////////////// trial code for buffer flexibility
 					window = w.capacity - w.position
-					if(window == w.capacity || window < w.capacity/2) {
+					if (window < w.capacity/2) {
 						t.SafeReset(time.Duration(w.timeout)) // early
 					}
 						
@@ -209,13 +207,17 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 						}
 						w.position += offset 
 				 	} else { // record can't fit and buffer is fullest to it capacity
-						t.SafeReset(time.Duration(w.timeout)) // early
 						// fmt.Println("buff(w) <----w.rec")
 						// elapsed := time.Since(now)
 						// fmt.Printf("[<-]-- Buffer fill time %s", elapsed)
 						n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
 						w.position =0;
 						w.buff.Reset()
+
+						//handle additional record
+						offset, err = w.buff.WriteString(string(FormatLogRecord(w.format, rec)))
+						w.position += offset
+						t.SafeReset(time.Duration(w.timeout)) // early
 					}	
 					//////////////////////end
 /*
@@ -237,6 +239,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 						w.position =0;
 						w.buff.Reset()
 						t.SafeReset(time.Duration(w.timeout)) // early
+						offset, err = w.buff.WriteString(string(FormatLogRecord(w.format, rec)))
 					}
 					/////////////// old end  
 */
@@ -403,6 +406,8 @@ func NewXMLLogWriter(fname string, rotate bool) *FileLogWriter {
 	</record>`).SetHeadFoot("<log created=\"%D %T\">", "</log>")
 }
 
+/*
+
 func ChanToSlice(ch interface{}) interface{} {
     //var buffer bytes.Buffer
     fmt.Println("....in ChanToSlice")
@@ -426,7 +431,7 @@ func ChanToSlice(ch interface{}) interface{} {
     //_, err := fmt.Fprint(w.file, FormatLogRecord(w.format, slv.Interface().(*LogRecord)))
     fmt.Println("write slv slice\n")
     //_, err := fmt.Fprint(w.file, slv.Interface().(*LogRecord))
-    _, err := fmt.Fprint(w.file, reflect.ValueOf(slv))
+    //_, err := fmt.Fprint(w.file, reflect.ValueOf(slv))
     if err != nil {
 	fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
     }
@@ -437,6 +442,7 @@ func ChanToSlice(ch interface{}) interface{} {
     //fmt.Println("2....after for loop", slv.Interface())
     return slv
 }
+*/
 
 func ToSlice(c chan interface{}) []interface{} {
     s := make([]interface{}, 0)

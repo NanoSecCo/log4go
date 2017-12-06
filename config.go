@@ -182,8 +182,8 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	maxbackup := 10
 	daily := false
 	rotate := false
-	timeout := "" 
-	capacity := "" 
+	timeout := 0 
+	capacity := 0 
 
 	// Parse properties
 	for _, prop := range props {
@@ -203,9 +203,9 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 		case "rotate":
 			rotate = strings.Trim(prop.Value, " \r\n") != "false"
 		case "timeout":
-			timeout = strings.Trim(prop.Value, " \r\n") 
+			timeout = strToNum(strings.Trim(prop.Value, " \r\n"),0) 
 		case "capacity":
-			capacity = strings.Trim(prop.Value, " \r\n")
+			capacity = strToNum(strings.Trim(prop.Value, " \r\n"),0) 
 		default:
 			fmt.Fprintf(os.Stderr, "LoadConfiguration: Warning: Unknown property \"%s\" for file filter in %s\n", prop.Name, filename)
 		}
@@ -228,19 +228,17 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	flw.SetRotateSize(maxsize)
 	flw.SetRotateMaxBackup(maxbackup)
 	flw.SetRotateDaily(daily)
-	if len(timeout) == 0 {
-		// use default value
+	if (timeout == 0) {
+		fmt.Printf("use default: 18000000000\n")
 	} else {
-		flw.SetTimeout(strToNum(timeout, 0))
+		flw.SetTimeout(timeout)
 	}
-
-	if len(capacity) == 0 {
-		// use default
+	if (capacity == 0) {
+		fmt.Printf("use default: 8192\n")
 	} else {
-		flw.SetCapacity(strToNum(capacity, 0))
+		flw.SetCapacity(capacity)
 	}
-		
-	fmt.Printf("INFO/%s,%d,%d\n", file, strToNum(timeout, 0), strToNum(capacity, 0))
+	fmt.Printf("INFO-%s,%d,%d\n", file, timeout, capacity)
 	return flw, true
 }
 
