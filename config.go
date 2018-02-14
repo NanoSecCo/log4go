@@ -181,6 +181,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	maxsize := 0
 	maxbackup := 10
 	daily := false
+	blog := false
 	rotate := false
 	timeout := 0 
 	capacity := 0 
@@ -200,6 +201,8 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 			maxbackup = strToNum(strings.Trim(prop.Value, " \r\n"), 10)
 		case "daily":
 			daily = strings.Trim(prop.Value, " \r\n") != "false"
+		case "blog":
+			blog = strings.Trim(prop.Value, " \r\n") != "false"
 		case "rotate":
 			rotate = strings.Trim(prop.Value, " \r\n") != "false"
 		case "timeout":
@@ -228,6 +231,7 @@ func xmlToFileLogWriter(filename string, props []xmlProperty, enabled bool) (*Fi
 	flw.SetRotateSize(maxsize)
 	flw.SetRotateMaxBackup(maxbackup)
 	flw.SetRotateDaily(daily)
+	flw.SetBlog(blog)
 	if (timeout == 0) {
 		fmt.Printf("use default: 18000000000\n")
 	} else {

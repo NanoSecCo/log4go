@@ -98,7 +98,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		maxbackup: 999,
 		//buffer:    make([]byte, w.capacity),
 		buff: 	   bytes.NewBuffer(make([]byte, 0, 8192)),
-		log_var:   true,
+		log_var:   false, //default disabled
 		capacity:  8192,
 		timeout:   18000000000, //18sec timer flush
 		position:  0,
@@ -376,6 +376,14 @@ func (w *FileLogWriter) SetRotateSize(maxsize int) *FileLogWriter {
 func (w *FileLogWriter) SetRotateDaily(daily bool) *FileLogWriter {
 	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetRotateDaily: %v\n", daily)
 	w.daily = daily
+	return w
+}
+
+// Set/enable buffered logging (chainable). Must be called before the first log message is
+// written.
+func (w *FileLogWriter) SetBlog(blog bool) *FileLogWriter {
+	//fmt.Fprintf(os.Stderr, "FileLogWriter.SetBlog: %v\n", daily)
+	w.log_var = blog 
 	return w
 }
 
