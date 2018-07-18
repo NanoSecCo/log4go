@@ -8,8 +8,6 @@ import (
 	"os"
 	"time"
 	//"reflect"
-	"os/signal"
-	"syscall"
 )
 
 type timer struct {
@@ -106,12 +104,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 
 	// handle shutdown signals
 	s := make(chan os.Signal, 1)
-	signal.Notify(s,
-		syscall.SIGQUIT,
-		syscall.SIGKILL, 
-		syscall.SIGINT, 
-		syscall.SIGTERM,
-		syscall.SIGTSTP)
+	notifySignals(s)
 
 	// open the file for the first time
 	if err = w.intRotate(); err != nil {
