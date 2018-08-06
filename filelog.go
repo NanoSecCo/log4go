@@ -292,10 +292,16 @@ func (w *FileLogWriter) intRotate() error {
 			}
 
 			w.file.Close()
-			// Rename the file to its newfound home
-			err = os.Rename(w.filename, fname)
-			if err != nil {
-				return fmt.Errorf("Rotate: %s\n", err)
+
+			for { // For loop to handle failure of rename when file is accessed by agent
+				// Rename the file to its newfound home
+				err = os.Rename(w.filename, fname)
+				if err != nil {
+					fmt.Println("Rename clash - Retrying")
+					continue
+				}
+
+				break
 			}
 		}
 	}
