@@ -298,6 +298,7 @@ func (w *FileLogWriter) intRotate() error {
 				err = os.Rename(w.filename, fname)
 				if err != nil {
 					fmt.Println("Rename clash - Retrying")
+					time.Sleep(1 * time.Second)
 					continue
 				}
 
