@@ -290,11 +290,10 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 	
 				if !v.IsDir() {
 	
-					w.filename = dir  + "/" + v.Name()
-	
-					fileSlice := strings.Split(w.filename, ".")
-	
-					w.suffixCounter, err = strconv.Atoi(fileSlice[len(fileSlice) - 1])
+					w.filename = filepath.Join(dir, v.Name())
+
+					extension := filepath.Ext(w.filename)	
+					w.suffixCounter, err = strconv.Atoi(strings.TrimPrefix(extension, "."))
 					if err != nil{
 						return err
 					}
