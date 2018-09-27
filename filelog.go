@@ -7,6 +7,12 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"strconv"
+	"strings"
+	"io/ioutil"
+	"sort"
+	"io"
+	"path/filepath"
 	//"reflect"
 )
 
@@ -20,9 +26,12 @@ type FileLogWriter struct {
 	rec chan *LogRecord
 	rot chan bool
 
+	defaultFilename string
+
 	// The opened file
 	filename string
 	file     *os.File
+	suffixCounter int
 
 	// The logging format
 	format string
@@ -88,18 +97,19 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	n = 0
 	nbuf = 0
 	w := &FileLogWriter{
-		rec:       make(chan *LogRecord, LogBufferLength),
-		rot:       make(chan bool),
-		filename:  fname,
-		format:    "[%D %T] [%L] (%S) %M",
-		rotate:    rotate,
-		maxbackup: 999,
-		//buffer:    make([]byte, w.capacity),
-		buff: 	   bytes.NewBuffer(make([]byte, 0, 8192)),
-		log_var:   false, //default disabled
-		capacity:  8192,
-		timeout:   18000000000, //18sec timer flush
-		position:  0,
+		rec:       		  make(chan *LogRecord, LogBufferLength),
+		rot:       		  make(chan bool),
+		defaultFilename:  fname,
+		filename: 		  fname,
+		format:   		  "[%D %T] [%L] (%S) %M",
+		rotate:   		  rotate,
+		maxbackup:		  999,
+		//buffer: 		    make([]byte, w.capacity),
+		buff: 	  		  bytes.NewBuffer(make([]byte, 0, 8192)),
+		log_var:  		  false, //default disabled
+		capacity: 		  8192,
+		timeout:  		  18000000000, //18sec timer flush
+		position: 		  0,
 	}
 
 	// handle shutdown signals
@@ -107,7 +117,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 	notifySignals(s)
 
 	// open the file for the first time
-	if err = w.intRotate(); err != nil {
+	if err = w.initializeNewFile(true); err != nil {
 		fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 		return nil
 	}
@@ -127,7 +137,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 		for {
 		    	select {
 			case <-w.rot:
-				if err = w.intRotate(); err != nil {
+				if err = w.initializeNewFile(false); err != nil {
 					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 					return
 				}
@@ -158,10 +168,9 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 				if !ok {
 					return
 				}
-				now := time.Now()
+				
 				if (w.maxlines > 0 && w.maxlines_curlines >= w.maxlines) ||
-					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) ||
-					(w.daily && now.Day() != w.daily_opendate) {
+					(w.maxsize > 0 && w.maxsize_cursize >= w.maxsize) {
 					// flush buffer 
 					n, err = fmt.Fprint(w.file, (string)(w.buff.String()))
 					if err != nil {
@@ -171,7 +180,7 @@ func NewFileLogWriter(fname string, rotate bool) *FileLogWriter {
 					w.position =0
 					w.buff.Reset()
 
-					if err = w.intRotate(); err != nil {
+					if err = w.initializeNewFile(false); err != nil {
 						fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.filename, err)
 						return
 					}
@@ -254,56 +263,62 @@ func (w *FileLogWriter) Rotate() {
 }
 
 // If this is called in a threaded context, it MUST be synchronized
-func (w *FileLogWriter) intRotate() error {
+func (w *FileLogWriter) initializeNewFile(startup bool) error {
+	
 	// Close any log file that may be open
 	if w.file != nil {
 		fmt.Fprint(w.file, FormatLogRecord(w.trailer, &LogRecord{Created: time.Now()}))
 		w.file.Close()
 	}
 
-	// If we are keeping log files, move it to the next available number
-	if w.rotate {
-		_, err := os.Lstat(w.filename)
-		if err == nil { // file exists
-			// Find the next available number
-			num := 1
-			fname := ""
-			if w.daily && time.Now().Day() != w.daily_opendate {
-				yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	if w.rotate{
 
-				for ; err == nil && num <= 999; num++ {
-					fname = w.filename + fmt.Sprintf(".%s.%03d", yesterday, num)
-					_, err = os.Lstat(fname)
-				}
-				// return error if the last file checked still existed
-				if err == nil {
-					return fmt.Errorf("Rotate: Cannot find free log number to rename %s\n", w.filename)
-				}
-			} else {
-				num = w.maxbackup - 1
-				for ; num >= 1; num-- {
-					fname = w.filename + fmt.Sprintf(".%d", num)
-					nfname := w.filename + fmt.Sprintf(".%d", num+1)
-					_, err = os.Lstat(fname)
-					if err == nil {
-						os.Rename(fname, nfname)
+		if startup{
+	
+			dir := filepath.Dir(w.filename)
+	
+			files, err := ioutil.ReadDir(dir)
+			if err != nil {
+				return err
+			}
+		
+			sort.Slice(files, func(i, j int) bool { 
+				return files[i].ModTime().After(files[j].ModTime())
+			})
+		
+			for _, v := range files{
+	
+				if !v.IsDir() {
+	
+					w.filename = dir  + "/" + v.Name()
+	
+					fileSlice := strings.Split(w.filename, ".")
+	
+					w.suffixCounter, err = strconv.Atoi(fileSlice[len(fileSlice) - 1])
+					if err != nil{
+						return err
 					}
+	
+					break
 				}
 			}
-
-			w.file.Close()
-
-			for { // For loop to handle failure of rename when file is accessed by agent
-				// Rename the file to its newfound home
-				err = os.Rename(w.filename, fname)
-				if err != nil {
-					fmt.Println("Rename clash - Retrying")
-					time.Sleep(1 * time.Second)
-					continue
-				}
-
-				break
-			}
+	
+		} else {
+						
+			w.suffixCounter ++
+	
+			var newFile string
+			
+			if w.suffixCounter <= w.maxbackup {
+				newFile = w.defaultFilename + "." + strconv.Itoa(w.suffixCounter)
+			} else {
+				newFile = w.defaultFilename
+			}	
+	
+			os.Remove(newFile)
+			w.filename = newFile			
+	
+			w.file.Close()	
 		}
 	}
 
@@ -312,19 +327,46 @@ func (w *FileLogWriter) intRotate() error {
 	if err != nil {
 		return err
 	}
+
 	w.file = fd
 
 	now := time.Now()
 	fmt.Fprint(w.file, FormatLogRecord(w.header, &LogRecord{Created: now}))
 
-	// Set the daily open date to the current date
-	w.daily_opendate = now.Day()
+	// update rotation values
+	
+	if w.maxlines_curlines, err = getNumberOfLines(fd); err != nil {
+		return err
+	}
 
-	// initialize rotation values
-	w.maxlines_curlines = 0
-	w.maxsize_cursize = 0
+	stat, err := fd.Stat()
+	if err != nil {
+		return err
+	}
+
+	w.maxsize_cursize = int(stat.Size())
 
 	return nil
+}
+
+
+func getNumberOfLines(r io.Reader) (int, error) {
+    buf := make([]byte, 32*1024)
+    count := 0
+    lineSep := []byte{'\n'}
+
+    for {
+        c, err := r.Read(buf)
+        count += bytes.Count(buf[:c], lineSep)
+
+        switch {
+        case err == io.EOF:
+            return count, nil
+
+        case err != nil:
+            return count, err
+        }
+    }
 }
 
 func (w *FileLogWriter) SetTimeout(timeout int) *FileLogWriter {
