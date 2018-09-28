@@ -312,6 +312,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 				newFile = w.defaultFilename + "." + strconv.Itoa(w.suffixCounter)
 			} else {
 				newFile = w.defaultFilename
+				w.suffixCounter = 0
 			}	
 	
 			os.Remove(newFile)
@@ -322,7 +323,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 	}
 
 	// Open the log file
-	fd, err := os.OpenFile(w.filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0660)
+	fd, err := os.OpenFile(w.filename, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
 	if err != nil {
 		return err
 	}
