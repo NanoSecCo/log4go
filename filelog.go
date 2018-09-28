@@ -275,7 +275,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 
 		if startup{
 	
-			dir := filepath.Dir(w.filename)
+			dir := filepath.Dir(w.defaultFilename)
 	
 			files, err := ioutil.ReadDir(dir)
 			if err != nil {
@@ -286,9 +286,13 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 				return files[i].ModTime().After(files[j].ModTime())
 			})
 		
-			for _, v := range files{
+			for _, v := range files {
+
+				if v.Name() == filepath.Base(w.defaultFilename){
+					break
+				}
 	
-				if !v.IsDir() {
+				if !v.IsDir() && strings.Contains(v.Name(), filepath.Base(w.defaultFilename)){					
 	
 					w.filename = filepath.Join(dir, v.Name())
 
