@@ -264,6 +264,9 @@ func (w *FileLogWriter) Rotate() {
 
 // If this is called in a threaded context, it MUST be synchronized
 func (w *FileLogWriter) initializeNewFile(startup bool) error {
+
+	// This function is called on startup of writer process 
+	// and also when a file maxsize or maxlines is exceeded
 	
 	// Close any log file that may be open
 	if w.file != nil {
@@ -273,8 +276,10 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 
 	if w.rotate{
 
-		if startup{
-	
+		// For startup, if there are log files already present, append to latest file
+		if startup{			
+
+			// Read directory to see if files already exist
 			dir := filepath.Dir(w.defaultFilename)
 	
 			files, err := ioutil.ReadDir(dir)
@@ -288,10 +293,12 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 		
 			for _, v := range files {
 
+				// If default file is the latest, then filename and suffix counter need not be updated
 				if v.Name() == filepath.Base(w.defaultFilename){
 					break
 				}
-	
+				
+				// Get latest file and update filename and current suffix
 				if !v.IsDir() && strings.Contains(v.Name(), filepath.Base(w.defaultFilename)){					
 	
 					w.filename = filepath.Join(dir, v.Name())
@@ -307,6 +314,9 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 			}
 	
 		} else {
+
+			// If not startup, it means a file has exceeded its maxlines or maxsize
+			// Hence start writing to next file
 						
 			w.suffixCounter ++
 	
@@ -315,6 +325,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 			if w.suffixCounter <= w.maxbackup {
 				newFile = w.defaultFilename + "." + strconv.Itoa(w.suffixCounter)
 			} else {
+				// If suffix counter reaches max backup limit, start overwriting initial file and repeat
 				newFile = w.defaultFilename
 				w.suffixCounter = 0
 			}	
@@ -326,7 +337,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 		}
 	}
 
-	// Open the log file
+	// Open the log file in read/write, append and create mode
 	fd, err := os.OpenFile(w.filename, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
 	if err != nil {
 		return err
@@ -337,8 +348,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 	now := time.Now()
 	fmt.Fprint(w.file, FormatLogRecord(w.header, &LogRecord{Created: now}))
 
-	// update rotation values
-	
+	// update maxlines and max size	
 	if w.maxlines_curlines, err = getNumberOfLines(fd); err != nil {
 		return err
 	}
