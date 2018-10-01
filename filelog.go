@@ -299,7 +299,8 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 				}
 				
 				// Get latest file and update filename and current suffix
-				if !v.IsDir() && strings.Contains(v.Name(), filepath.Base(w.defaultFilename)){					
+				if !v.IsDir() && strings.HasPrefix(v.Name(), filepath.Base(w.defaultFilename)) && 
+				   !strings.HasSuffix(v.Name(), ".status"){					
 	
 					w.filename = filepath.Join(dir, v.Name())
 
