@@ -299,8 +299,7 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 				}
 				
 				// Get latest file and update filename and current suffix
-				if !v.IsDir() && strings.HasPrefix(v.Name(), filepath.Base(w.defaultFilename)) && 
-				   !strings.HasSuffix(v.Name(), ".status"){					
+				if isLogFile(v, filepath.Base(w.defaultFilename)) {					
 	
 					w.filename = filepath.Join(dir, v.Name())
 
@@ -382,6 +381,17 @@ func getNumberOfLines(r io.Reader) (int, error) {
             return count, err
         }
     }
+}
+
+func isLogFile(file os.FileInfo, logPrefix string) (logfile bool){
+
+	if !file.IsDir() && strings.HasPrefix(file.Name(), logPrefix) && 
+	   !strings.HasSuffix(file.Name(), ".status"){
+
+		logfile = true
+	}
+
+	return
 }
 
 func (w *FileLogWriter) SetTimeout(timeout int) *FileLogWriter {
