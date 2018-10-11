@@ -331,11 +331,15 @@ func (w *FileLogWriter) initializeNewFile(startup bool) error {
 			}	
 	
 			os.Remove(newFile)
+			os.Remove(newFile + ".status")
 			w.filename = newFile			
 	
 			w.file.Close()	
 		}
 	}
+
+	// Small delay to have different last modified time for closing file and opening file
+	time.Sleep(1 * time.Second)
 
 	// Open the log file in read/write, append and create mode
 	fd, err := os.OpenFile(w.filename, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
